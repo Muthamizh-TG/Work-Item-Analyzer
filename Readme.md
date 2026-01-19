@@ -111,7 +111,7 @@ cd backend
 python analyzer_online.py
 ```
 
-**Frontend (if you have one):**
+**Frontend (React):**
 
 ```bash
 cd frontend
