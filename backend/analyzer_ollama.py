@@ -3,29 +3,13 @@ import csv
 import os
 from pathlib import Path
 import dotenv
-from openai import OpenAI
 from colorama import init, Fore, Style
+from ollama import chat
 
-from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
-from fastapi.middleware.cors import CORSMiddleware
-import uvicorn
-dotenv.load_dotenv()
 init(autoreset=True)
 
-app = FastAPI(title="Work Item Analyzer API")
-
-# Allow CORS for all origins (for development)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
 # Load environment variables
-
+dotenv.load_dotenv()
 
 # ----------------------------
 # Configuration
@@ -36,17 +20,8 @@ DATA_DIR = BASE_DIR / "data"
 PROJECT_CSV = DATA_DIR / "projects_workitems.csv"
 DEVELOPER_CSV = DATA_DIR / "developers_workitems.csv"
 
-MODEL_NAME = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
-
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-
-if not OPENAI_API_KEY:
-    raise RuntimeError(
-        "OPENAI_API_KEY not found. Check your .env file location."
-    )
-
-client = OpenAI(api_key=OPENAI_API_KEY)
-
+# Ollama model name (e.g., "llama2", "mistral", etc.)
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2")
 
 
 # ----------------------------
@@ -133,6 +108,14 @@ def _rows_to_sentences() -> str:
 # Query answering
 # ----------------------------
 def answer_query(question: str) -> str:
+    # Detect greetings/small talk and respond simply
+    greetings = {"hi", "hello", "hey", "howdy", "good morning", "good afternoon", "good evening", "greetings", "thanks", "thank you", "yo", "sup"}
+    q_lower = question.strip().lower()
+    if any(greet in q_lower for greet in greetings) and len(q_lower.split()) <= 4:
+        if "thank" in q_lower:
+            return "You're welcome! If you have any questions about your work items or projects, just ask."
+        return "Hello! How can I help you with your work items or projects today?"
+
     _ensure_data_files()
     knowledge = _rows_to_sentences()
 
@@ -142,58 +125,33 @@ def answer_query(question: str) -> str:
             "Please fill the CSV files and try again."
         )
 
-    messages = [
-        {
-            "role": "system",
-            "content": (
-                "You are a human-like project assistant. "
-                "Structure answers in three parts unless unnecessary: "
-                "(1) a short introductory paragraph summarizing the answer, "
-                "(2) a concise bullet list highlighting key points or items, "
-                "(3) a short concluding paragraph with insight or context. "
-                "Do NOT sound like a database or CSV export. "
-                "Use ONLY the information from the knowledge base. "
-                "Do not invent data. "
-                "Keep bullets short and meaningful."
-            ),
-        },
-        {
-            "role": "system",
-            "content": "Knowledge base:\n" + knowledge,
-        },
-        {
-            "role": "user",
-            "content": question,
-        },
-    ]
-
-    response = client.responses.create(
-        model=MODEL_NAME,
-        input=messages,
-        temperature=0.2,
+    prompt = (
+        "You are a human-like project assistant. "
+        "Structure answers in three parts unless unnecessary: "
+        "(1) a short introductory paragraph summarizing the answer, "
+        "(2) a concise bullet list highlighting key points or items, "
+        "(3) a short concluding paragraph with insight or context. "
+        "Do NOT sound like a database or CSV export. "
+        "Use ONLY the information from the knowledge base. "
+        "Do not invent data. "
+        "Keep bullets short and meaningful.\n"
+        f"Knowledge base:\n{knowledge}\n"
+        f"User question: {question}"
     )
 
-    return response.output_text.strip()
+    try:
+        response = chat(
+            model=OLLAMA_MODEL,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        return response.message.content
+    except Exception as e:
+        return f"Ollama error: {e}"
 
 
-# ----------------------------
 # ----------------------------
 # CLI
 # ----------------------------
-
-@app.post("/query")
-async def query_endpoint(request: Request):
-    data = await request.json()
-    question = data.get("question", "").strip()
-    if not question:
-        return JSONResponse({"error": "Missing 'question' in request."}, status_code=400)
-    try:
-        answer = answer_query(question)
-    except Exception as exc:
-        return JSONResponse({"error": str(exc)}, status_code=500)
-    return {"answer": answer}
-
-
 def main() -> None:
     print(Fore.CYAN + "Work Item Analyzer Bot (type 'exit' to quit)" + Style.RESET_ALL)
     _ensure_data_files()
@@ -220,5 +178,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run("analyzer_online:app", host="0.0.0.0", port=8000, reload=True)
+    main()
